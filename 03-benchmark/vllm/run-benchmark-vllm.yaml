@@ -1,0 +1,70 @@
+# run-benchmark-vllm.yaml — Run `vllm bench serve` against Stack A (vLLM baseline).
+#
+# Uses the same vllm/vllm-openai image we serve from, so no extra image to pull
+# and no ConfigMap to apply. The container's entrypoint is `vllm`; we pass
+# `bench serve ...` as the arguments.
+#
+# What it does:
+#   • Sends --num-prompts requests from the ShareGPT dataset against the
+#     target endpoint at a constant --request-rate (req/sec).
+#   • Streams responses and measures TTFT, TPOT, ITL, e2e latency, and
+#     output throughput.
+#   • Writes a JSON result file containing percentiles + per-request data.
+#
+# Tuning knobs to vary per run (edit the args block):
+#   --request-rate    : the QPS for THIS run. Sweep manually: 5, 10, 20, 40, 80...
+#                       To get max throughput in a single run, use `inf`.
+#   --num-prompts     : total prompts. Should be >= request_rate * 120 so each
+#                       run is at least ~2 min of steady-state traffic.
+#   --max-concurrency : caps in-flight requests; set high (256+) so vLLM, not
+#                       the client, is the bottleneck.
+#
+# For a full QPS sweep, use the run-sweep.sh script which re-applies this Job
+# with substituted rates and aggregates the JSONs.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-vllm-baseline
+  namespace: bench
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: { app: bench, target: vllm-baseline }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: vllm-bench
+          image: vllm/vllm-openai:v0.11.0
+          command: ["vllm"]
+          args:
+            - "bench"
+            - "serve"
+            - "--backend=openai-chat"
+            - "--base-url=http://vllm-gemma.vllm-base.svc.cluster.local:8000"
+            - "--endpoint=/v1/chat/completions"
+            - "--model=google/gemma-3n-E4B-it"      # must match the served-model-name
+            - "--dataset-name=sharegpt"
+            - "--num-prompts=1200"                   # ~2 min of traffic at 10 QPS
+            - "--request-rate=10"                    # ← change per run for sweep
+            - "--max-concurrency=256"
+            - "--save-result"
+            - "--result-dir=/results"
+            - "--result-filename=bench-vllm-baseline.json"
+            - "--metric-percentiles=50,90,95,99"
+            - "--seed=42"
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: llm-d-hf-token, key: HF_TOKEN }
+            - { name: HF_HOME, value: "/tmp/hf" }
+          resources:
+            requests: { cpu: "1", memory: "2Gi" }
+            limits:   { cpu: "2", memory: "4Gi" }
+          volumeMounts:
+            - { name: results,  mountPath: /results }
+            - { name: hf-cache, mountPath: /tmp/hf }
+      volumes:
+        - { name: results,  emptyDir: {} }
+        - { name: hf-cache, emptyDir: {} }
