@@ -1,0 +1,39 @@
+# run-benchmark-llmd.yaml — Run inference-perf against Stack B (llm-d).
+# The only difference vs the vLLM-baseline Job is BASE_URL: this one points
+# at the Inference Gateway service rather than the bare vLLM service, so
+# requests go through the EPP and get inference-aware routing.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-llmd
+  namespace: bench
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: { app: bench, target: llm-d }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: inference-perf
+          image: us-docker.pkg.dev/gke-aishared-dev/inference-perf/inference-perf:latest
+          args: ["--config", "/cfg/config.yaml", "--output-dir", "/results"]
+          env:
+            # The llm-d Gateway exposes a Service with the same name as the
+            # Gateway resource. In ms-inference-scheduling, that's
+            # infra-inference-scheduling-inference-gateway.
+            - { name: BASE_URL, value: "http://infra-inference-scheduling-inference-gateway.llm-d.svc.cluster.local:80" }
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: llm-d-hf-token, key: HF_TOKEN }
+          resources:
+            requests: { cpu: "4", memory: "8Gi" }
+            limits:   { cpu: "8", memory: "16Gi" }
+          volumeMounts:
+            - { name: cfg, mountPath: /cfg }
+            - { name: results, mountPath: /results }
+      volumes:
+        - name: cfg
+          configMap: { name: inference-perf-config }
+        - name: results
+          emptyDir: {}

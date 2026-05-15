@@ -1,0 +1,19 @@
+# 02-vllm-service.yaml — Service for the vLLM baseline.
+# ClusterIP is enough for the benchmark Job which runs in-cluster.
+# Add a Gateway + HTTPRoute later if you need external access.
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-gemma
+  namespace: vllm-base
+  labels: { app: vllm-gemma, stack: vllm-baseline }
+spec:
+  type: ClusterIP
+  selector: { app: vllm-gemma }
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+    - name: metrics
+      port: 9090
+      targetPort: metrics

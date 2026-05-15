@@ -1,0 +1,61 @@
+# 03-hpa.yaml — HPA for the llm-d optimized baseline.
+#
+# Key difference from Stack A: we scale on metrics emitted by the llm-d
+# Endpoint Picker (EPP), which aggregates inference-aware state across all
+# model-server pods in the InferencePool. We pick KV-cache utilization as the
+# primary signal: when avg KV utilization across the pool crosses 80%, add a
+# replica. This is more proactive than "queue depth" because it scales BEFORE
+# requests start queuing.
+#
+# In llm-d v0.7, the SLO-aware workload autoscaler is GA. If your customer's
+# SLO is expressed in TTFT/TPOT terms, switch this to use the
+# `inference.networking.x-k8s.io/v1alpha1` InferenceAutoscaling CRD instead.
+# This HPA is the broadly portable v2 fallback.
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ms-inference-scheduling
+  namespace: llm-d
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet              # llm-d ms-inference-scheduling is a StatefulSet
+    name: ms-inference-scheduling
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    # Primary: KV-cache utilization. Emitted by vLLM as vllm:gpu_cache_usage_perc.
+    - type: External
+      external:
+        metric:
+          name: prometheus.googleapis.com|vllm:gpu_cache_usage_perc|gauge
+          selector:
+            matchLabels:
+              metric.labels.namespace: llm-d
+        target:
+          type: AverageValue
+          averageValue: "0.80"     # 80% — scale up before pods start queuing
+    # Secondary safety net: queue depth, same as the baseline HPA.
+    - type: External
+      external:
+        metric:
+          name: prometheus.googleapis.com|vllm:num_requests_waiting|gauge
+          selector:
+            matchLabels:
+              metric.labels.namespace: llm-d
+        target:
+          type: AverageValue
+          averageValue: "5"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 15
+      policies:
+        - { type: Pods,    value: 1, periodSeconds: 60 }
+        - { type: Percent, value: 100, periodSeconds: 60 }
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - { type: Pods, value: 1, periodSeconds: 120 }
+      selectPolicy: Min

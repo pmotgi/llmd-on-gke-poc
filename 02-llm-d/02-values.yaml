@@ -1,0 +1,73 @@
+# 02-values.yaml — Overrides for llm-d's ms-inference-scheduling chart, tuned
+# for Gemma 3n / Gemma 4 E4B on a single RTX PRO 6000 (G4) GPU per replica.
+#
+# This file overrides the upstream defaults in:
+#   llm-d/guides/optimized-baseline/ms-inference-scheduling/values.yaml
+#
+# Reference: https://llm-d.ai/docs/guide/Installation/inference-scheduling
+
+# Number of vLLM replicas. HPA (03-hpa.yaml) will adjust this dynamically;
+# minReplicas=1, maxReplicas=4. Start at 1 to give scaling visibility.
+replicas: 1
+
+multinode: false        # single-GPU per replica; not multi-host
+
+modelArtifacts:
+  # llm-d wires the secret 'llm-d-hf-token' automatically when type=hf.
+  uri: "hf://google/gemma-3n-E4B-it"   # change to gemma-4-E4B-it if licensed
+  size: 20Gi                            # ephemeral storage for weight download
+
+# vLLM container — the args here are what makes "max utilization" happen on
+# this GPU. Tuned to mirror the baseline so the comparison is apples-to-apples
+# except for the routing layer.
+inferenceServer:
+  image: vllm/vllm-openai:v0.11.0
+  args:
+    - "--served-model-name=google/gemma-3n-E4B-it"
+    - "--max-model-len=32768"
+    - "--max-num-seqs=256"
+    - "--gpu-memory-utilization=0.92"
+    - "--enable-prefix-caching"
+    - "--kv-cache-dtype=fp8"
+    - "--dtype=bfloat16"
+    - "--trust-remote-code"
+  resources:
+    limits:   { nvidia.com/gpu: 1, cpu: "16", memory: 64Gi }
+    requests: { nvidia.com/gpu: 1, cpu: "8",  memory: 32Gi }
+
+# Node placement — the same selectors/tolerations the vLLM baseline uses.
+# If PROVISIONING_MODEL=FLEX_START, add the compute-class node selector.
+nodeSelector:
+  cloud.google.com/gke-accelerator: nvidia-rtx-pro-6000
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+  - key: cloud.google.com/gke-spot
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+# Endpoint Picker (EPP) — the brain of llm-d's inference-aware routing.
+# The default scoring profile is "prefix-cache aware + load aware",
+# which is exactly the improvement over plain K8s Service round-robin.
+epp:
+  replicas: 1
+  # Approximate prefix-cache scorer is the v0.7 default. To enable the
+  # newer precise scorer (introspects vLLM cache contents directly,
+  # higher hit rate), uncomment:
+  # scoring:
+  #   prefixCache: precise
+
+# Gateway plumbing — use GKE's externally managed gateway controller.
+gateway:
+  className: gke-l7-regional-external-managed
+
+# Expose vLLM Prometheus metrics so HPA can read them.
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false      # we use PodMonitoring (Managed Prometheus) instead
+  podMonitoring:
+    enabled: true
+    interval: 15s

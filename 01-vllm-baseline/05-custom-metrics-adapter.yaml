@@ -1,0 +1,10 @@
+# 05-custom-metrics-adapter.yaml — placeholder.
+#
+# The actual adapter is installed via the upstream manifest in
+# 00-setup/06-install-prereqs.sh:
+#
+#   kubectl apply -f https://raw.githubusercontent.com/GoogleCloudPlatform/k8s-stackdriver/master/custom-metrics-stackdriver-adapter/deploy/production/adapter_new_resource_model.yaml
+#
+# This file exists only to keep the directory structure self-documenting.
+# If you want to pin the adapter version, copy the upstream manifest here
+# and reference your local file instead.

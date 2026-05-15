@@ -1,0 +1,15 @@
+# 03-podmonitoring.yaml — Tells GKE Managed Prometheus to scrape vLLM's
+# /metrics endpoint. The custom-metrics adapter then makes these metrics
+# available to HPA under `external.metrics.k8s.io`.
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: vllm-gemma
+  namespace: vllm-base
+spec:
+  selector:
+    matchLabels: { app: vllm-gemma }
+  endpoints:
+    - port: http             # vLLM exposes /metrics on the same port as /v1/chat/completions
+      path: /metrics
+      interval: 15s

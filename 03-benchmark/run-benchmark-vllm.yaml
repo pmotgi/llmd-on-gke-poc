@@ -1,0 +1,33 @@
+# run-benchmark-vllm.yaml — Run inference-perf against Stack A (vLLM baseline).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-vllm-baseline
+  namespace: bench
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: { app: bench, target: vllm-baseline }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: inference-perf
+          image: us-docker.pkg.dev/gke-aishared-dev/inference-perf/inference-perf:latest
+          args: ["--config", "/cfg/config.yaml", "--output-dir", "/results"]
+          env:
+            - { name: BASE_URL, value: "http://vllm-gemma.vllm-base.svc.cluster.local:8000" }
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: llm-d-hf-token, key: HF_TOKEN }
+          resources:
+            requests: { cpu: "4", memory: "8Gi" }
+            limits:   { cpu: "8", memory: "16Gi" }
+          volumeMounts:
+            - { name: cfg, mountPath: /cfg }
+            - { name: results, mountPath: /results }
+      volumes:
+        - name: cfg
+          configMap: { name: inference-perf-config }
+        - name: results
+          emptyDir: {}

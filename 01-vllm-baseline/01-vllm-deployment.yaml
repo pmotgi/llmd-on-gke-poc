@@ -1,0 +1,110 @@
+# 01-vllm-deployment.yaml — Stack A: Plain vLLM, single-GPU replicas.
+# Renders the same way regardless of PROVISIONING_MODEL — the node pool you
+# created in step 03 dictates whether these land on on-demand, Spot, or
+# Flex-start (DWS) GPUs.
+#
+# Notes on the vLLM args:
+#   --gpu-memory-utilization 0.92  → with a 96GB RTX PRO 6000, that's ~88 GB
+#       available for weights + KV cache. Gemma 3n E4B in BF16 is ~8 GB; the
+#       remaining ~80 GB is KV cache headroom (this is why this GPU
+#       overprovisions a 4B SLM so aggressively, and exactly what we want to
+#       showcase max utilization).
+#   --max-model-len 32768          → matches Gemma 3n's 32K context window.
+#                                    Bump to 128K only if MODEL_ID is gemma-4.
+#   --max-num-seqs 256             → high concurrency ceiling so KV cache,
+#                                    not seq count, is what bounds throughput.
+#   --enable-prefix-caching        → cheap win even without llm-d's smart router.
+#   --kv-cache-dtype fp8           → 2× KV-cache capacity at minimal quality cost
+#                                    on Blackwell (RTX PRO 6000). Toggle off if
+#                                    customer wants strict bit-parity baseline.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-gemma
+  namespace: vllm-base
+  labels: { app: vllm-gemma, stack: vllm-baseline }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: vllm-gemma }
+  template:
+    metadata:
+      labels: { app: vllm-gemma, stack: vllm-baseline }
+      annotations:
+        # tells GKE Image Streaming to prefer pre-warmed layers
+        gke-gcsfuse/volumes: "true"
+    spec:
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-rtx-pro-6000
+        # If you set PROVISIONING_MODEL=FLEX_START, also uncomment:
+        # cloud.google.com/compute-class: g4-flex-start
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        # Spot-safe by default; the toleration is harmless on on-demand nodes.
+        - key: cloud.google.com/gke-spot
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.11.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--model=$(MODEL_ID)"
+            - "--served-model-name=$(MODEL_ID)"
+            - "--host=0.0.0.0"
+            - "--port=8000"
+            - "--tensor-parallel-size=1"
+            - "--max-model-len=32768"
+            - "--max-num-seqs=256"
+            - "--gpu-memory-utilization=0.92"
+            - "--enable-prefix-caching"
+            - "--kv-cache-dtype=fp8"
+            - "--dtype=bfloat16"
+            - "--trust-remote-code"
+            - "--disable-log-requests"
+          env:
+            - { name: MODEL_ID, value: "google/gemma-3n-E4B-it" }     # ← change here if needed
+            - { name: HF_HOME, value: "/data/hf" }
+            - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "1" }
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: llm-d-hf-token, key: HF_TOKEN }
+          ports:
+            - { name: http, containerPort: 8000 }
+            - { name: metrics, containerPort: 8000 }  # vLLM exposes /metrics on the same port
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+              cpu: "16"
+              memory: "64Gi"
+              ephemeral-storage: "50Gi"
+            requests:
+              nvidia.com/gpu: "1"
+              cpu: "8"
+              memory: "32Gi"
+              ephemeral-storage: "20Gi"
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 60     # weights download + load takes a minute
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30        # tolerate slow first load
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 600
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - { name: dshm, mountPath: /dev/shm }
+            - { name: hf-cache, mountPath: /data/hf }
+      volumes:
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 8Gi }
+        - name: hf-cache
+          emptyDir: { sizeLimit: 50Gi }

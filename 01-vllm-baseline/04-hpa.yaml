@@ -1,0 +1,49 @@
+# 04-hpa.yaml — HPA for the vLLM baseline.
+#
+# Why this metric? `vllm:num_requests_waiting` is the count of requests queued
+# inside vLLM that have NOT yet started prefill. It's the most direct signal of
+# "this replica is overloaded" — better than GPU SM % (which can be near 100%
+# at healthy steady-state) and better than QPS (which doesn't account for
+# request shape).
+#
+# averageValue: 5  → scale up if there are ≥5 queued requests per replica on average.
+#                    Tune based on your TTFT SLO; lower = more aggressive scaling.
+#
+# stabilizationWindowSeconds tuned asymmetrically: react fast to load (15s),
+# scale down slowly (5min) so we don't thrash GPU nodes.
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vllm-gemma
+  namespace: vllm-base
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vllm-gemma
+  minReplicas: 1
+  maxReplicas: 4              # bounded by MAX_NODES in 00-env.sh
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: prometheus.googleapis.com|vllm:num_requests_waiting|gauge
+          selector:
+            matchLabels:
+              metric.labels.namespace: vllm-base
+        target:
+          type: AverageValue
+          averageValue: "5"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 15
+      policies:
+        - { type: Pods,    value: 1, periodSeconds: 60 }
+        - { type: Percent, value: 100, periodSeconds: 60 }
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - { type: Pods, value: 1, periodSeconds: 120 }
+      selectPolicy: Min
