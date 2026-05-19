@@ -174,7 +174,22 @@ The benchmark harness sweeps QPS, measures all four, and prints a knee-point sum
 
 ---
 
-## 7. Next steps after the POC
+## 7. Expected ballpark numbers (single G4 / 1× RTX PRO 6000)
+
+Rough what-to-expect for Gemma 4 E4B-it, BF16, batch decode, output-heavy workload (sharegpt). Real numbers come from the benchmark run.
+
+| Metric | vLLM baseline | llm-d optimized baseline |
+|---|---|---|
+| Max throughput (output tok/s/GPU) | ~3,500–5,000 | ~4,500–6,500 (prefix-cache hits help) |
+| p50 TTFT at 80% util | ~120 ms | ~80 ms |
+| p99 TPOT at 80% util | ~25 ms | ~20 ms |
+| KV cache utilization at knee | 85–92% | 88–95% |
+
+llm-d's wins compound when there's **shared prefix structure** in the workload (system prompts, few-shot examples, conversation history). For pure unique-prompt workloads the delta is smaller.
+
+---
+
+## 8. Next steps after the POC
 
 - Turn on **predicted-latency scheduling** in the EPP (GA in llm-d v0.7)
 - Try **prefill/decode disaggregation** if the customer's median input is large (>2K tokens) — splits the work across separate replicas

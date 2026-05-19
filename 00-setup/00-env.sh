@@ -36,7 +36,7 @@ export HF_TOKEN="${HF_TOKEN:-hf_your_token_here}"
 
 # ----- Namespaces -----
 export NS_VLLM="${NS_VLLM:-vllm-base}"
-export NS_LLMD="${NS_LLMD:-llm-d}"
+export NS_LLMD="${NS_LLMD:-llm-d-optimized-baseline}"
 export NS_BENCH="${NS_BENCH:-bench}"
 
 # ----- Derived -----
