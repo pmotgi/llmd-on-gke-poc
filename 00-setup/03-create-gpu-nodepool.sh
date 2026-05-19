@@ -41,7 +41,7 @@ COMMON_ARGS=(
   --accelerator="type=$GPU_TYPE,count=$GPU_COUNT_PER_NODE,gpu-driver-version=LATEST"
   --node-taints="nvidia.com/gpu=present:NoSchedule"
   --node-labels="workload=inference,gpu=rtx-pro-6000"
-  --disk-type="pd-balanced"
+  --ephemeral-storage-local-ssd count=4
   --disk-size="200"
   --image-type="COS_CONTAINERD"
   --enable-autoupgrade
@@ -76,43 +76,18 @@ case "$PROVISIONING_MODEL" in
     echo "    All workload manifests in this POC already include the matching toleration."
     ;;
 
-  FLEX_START)
+FLEX_START)
     echo "[+] Creating FLEX-START G4 node pool via Custom Compute Class..."
-    # For Flex-start, the recommended pattern is a Custom Compute Class (CCC).
-    # Pods reference the class via the cloud.google.com/compute-class label;
-    # GKE provisions DWS-backed nodes on demand, up to maxRunDurationSeconds.
-    cat <<EOF | kubectl apply -f -
-apiVersion: cloud.google.com/v1
-kind: ComputeClass
-metadata:
-  name: g4-flex-start
-spec:
-  priorities:
-  - machineType: ${MACHINE_TYPE}
-    gpu:
-      type: ${GPU_TYPE}
-      count: ${GPU_COUNT_PER_NODE}
-    flexStart:
-      enabled: true
-      maxRunDurationSeconds: 604800   # 7 days, the DWS Flex-start ceiling
-  nodePoolAutoCreation:
-    enabled: true
-  autoscalingPolicy:
-    minNodeCount: 0
-    maxNodeCount: ${MAX_NODES}
-EOF
-    echo "[+] Compute class 'g4-flex-start' created. Node-pool autoCreation is enabled,"
-    echo "    so DWS will request nodes the first time a Pod with"
-    echo "    'cloud.google.com/compute-class: g4-flex-start' is scheduled."
-    echo "    Pods stay Pending until allocation completes (usually minutes; up to days)."
-    echo
-    echo "    *** IMPORTANT *** When using FLEX_START, you must add this to each"
-    echo "    Deployment.spec.template.spec:"
-    echo "      nodeSelector:"
-    echo "        cloud.google.com/compute-class: g4-flex-start"
-    echo "    (the patch script below does this automatically)."
+    gcloud container node-pools create "$GPU_NODEPOOL_NAME" \
+      "${COMMON_ARGS[@]}" \
+      --flex-start \
+      --num-nodes=0 \
+      --enable-autoscaling --min-nodes=0 --max-nodes="${MAX_NODES}" \
+      --location-policy=ANY \
+      --reservation-affinity=none \
+      --no-enable-autorepair
     ;;
-esac
+  esac
 
 echo "[+] Done. Waiting briefly for nodes to register..."
 sleep 20

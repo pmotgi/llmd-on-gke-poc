@@ -1,0 +1,7 @@
+# System files
+.DS_Store
+Thumds.db
+
+# Local/temp files
+*.log
+*.tmp

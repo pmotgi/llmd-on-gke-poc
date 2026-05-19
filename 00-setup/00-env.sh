@@ -3,34 +3,34 @@
 # Edit values below, then `source 00-env.sh`.
 
 # ----- GCP project / region -----
-export PROJECT_ID="${PROJECT_ID:-your-project-id}"
-export REGION="${REGION:-us-central1}"
-export ZONE="${ZONE:-us-central1-b}"  # G4 fractional GPU types only in us-central1-b;
+export PROJECT_ID="${PROJECT_ID:-northam-ce-mlai-tpu}"
+export REGION="${REGION:-us-east5}"
+export ZONE="${ZONE:-us-east5-a}"  # G4 fractional GPU types only in us-central1-b;
                                       # full g4-standard-48 is in more zones — see
                                       # https://docs.cloud.google.com/compute/docs/regions-zones/gpu-regions-zones
 
 # ----- Cluster -----
-export CLUSTER_NAME="${CLUSTER_NAME:-gemma-poc}"
-export CLUSTER_VERSION="${CLUSTER_VERSION:-1.32}"   # rapid channel
+export CLUSTER_NAME="${CLUSTER_NAME:-pmotgi-tr-llmd-poc}"
+export CLUSTER_VERSION="${CLUSTER_VERSION:-1.34}"   # rapid channel
 export RELEASE_CHANNEL="${RELEASE_CHANNEL:-rapid}"
 
 # ----- GPU node pool -----
-export GPU_NODEPOOL_NAME="${GPU_NODEPOOL_NAME:-gpu-g4}"
+export GPU_NODEPOOL_NAME="${GPU_NODEPOOL_NAME:-gpu-g4-spot}"
 export MACHINE_TYPE="${MACHINE_TYPE:-g4-standard-48}"
 export GPU_TYPE="${GPU_TYPE:-nvidia-rtx-pro-6000}"
 export GPU_COUNT_PER_NODE="${GPU_COUNT_PER_NODE:-1}"
 export MIN_NODES="${MIN_NODES:-1}"
-export MAX_NODES="${MAX_NODES:-4}"
+export MAX_NODES="${MAX_NODES:-8}"
 
 # ----- Provisioning model: ON_DEMAND | SPOT | FLEX_START -----
 # ON_DEMAND  — guaranteed capacity, highest cost
 # SPOT       — ~60–70% cheaper, preemptible, 30s eviction notice
 # FLEX_START — DWS-allocated, capacity request, runs ≤7 days, cheapest reliable burst
-export PROVISIONING_MODEL="${PROVISIONING_MODEL:-ON_DEMAND}"
+export PROVISIONING_MODEL="${PROVISIONING_MODEL:-SPOT}"
 
 # ----- Model -----
 # Pick ONE. Both work; gemma-3n is more battle-tested in vLLM today.
-export MODEL_ID="${MODEL_ID:-google/gemma-3n-E4B-it}"
+export MODEL_ID="${MODEL_ID:-google/gemma-4-E4B-it}"
 # export MODEL_ID="google/gemma-4-E4B-it"
 
 # HuggingFace token (read scope) — accept the model license first on hf.co

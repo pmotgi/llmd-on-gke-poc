@@ -34,26 +34,48 @@ spec:
       labels: { app: bench, target: vllm-baseline }
     spec:
       restartPolicy: Never
+      initContainers:
+        - name: download-dataset
+          image: vllm/vllm-openai:latest
+          command: ["python3", "-c"]
+          args:
+            - |
+              import urllib.request
+              url = "https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json"
+              print("Downloading ShareGPT dataset...")
+              urllib.request.urlretrieve(url, "/tmp/hf/sharegpt.json")
+              print("Download complete.")
+          volumeMounts:
+            - { name: hf-cache, mountPath: /tmp/hf }
       containers:
         - name: vllm-bench
-          image: vllm/vllm-openai:v0.11.0
-          command: ["vllm"]
+          image: vllm/vllm-openai:latest
+          command: ["/bin/sh", "-c"]
           args:
-            - "bench"
-            - "serve"
-            - "--backend=openai-chat"
-            - "--base-url=http://vllm-gemma.vllm-base.svc.cluster.local:8000"
-            - "--endpoint=/v1/chat/completions"
-            - "--model=google/gemma-3n-E4B-it"      # must match the served-model-name
-            - "--dataset-name=sharegpt"
-            - "--num-prompts=1200"                   # ~2 min of traffic at 10 QPS
-            - "--request-rate=10"                    # ← change per run for sweep
-            - "--max-concurrency=256"
-            - "--save-result"
-            - "--result-dir=/results"
-            - "--result-filename=bench-vllm-baseline.json"
-            - "--metric-percentiles=50,90,95,99"
-            - "--seed=42"
+            - |
+              # Set to "--prefix-len=2048" to test prefix caching with a shared system prompt/context.
+              PREFIX_LEN="--prefix-len=2048"
+
+              vllm bench serve \
+                --backend=openai-chat \
+                --base-url=http://vllm-gemma.vllm-base.svc.cluster.local:8000 \
+                --endpoint=/v1/chat/completions \
+                --model=google/gemma-4-E4B-it \
+                --dataset-name=sharegpt \
+                --dataset-path=/tmp/hf/sharegpt.json \
+                $PREFIX_LEN \
+                --num-prompts=1200 \
+                --request-rate=10 \
+                --max-concurrency=256 \
+                --save-result \
+                --result-dir=/results \
+                --result-filename=bench-vllm-baseline.json \
+                --metric-percentiles=50,90,95,99 \
+                --seed=42
+              echo "--- RESULT JSON START ---"
+              cat /results/bench-vllm-baseline.json
+              echo ""
+              echo "--- RESULT JSON END ---"
           env:
             - name: HF_TOKEN
               valueFrom:

@@ -51,7 +51,11 @@ run_one() {
     || { echo "ERROR: job did not complete"; kubectl -n "$NS" logs -l job-name="$job_name" --tail=50; return 1; }
 
   POD=$(kubectl -n "$NS" get pod -l job-name="$job_name" -o jsonpath='{.items[0].metadata.name}')
-  kubectl -n "$NS" cp "$POD:/results/$result_file" "./results/${stack}-rate${rate}.json"
+  kubectl -n "$NS" logs "$POD" | awk '/--- RESULT JSON START ---/{flag=1; next} /--- RESULT JSON END ---/{flag=0} flag' > "./results/${stack}-rate${rate}.json"
+  if [[ ! -s "./results/${stack}-rate${rate}.json" ]]; then
+    echo "ERROR: Failed to extract JSON result from pod logs for ${stack} rate ${rate}" >&2
+    return 1
+  fi
   echo "[+] Saved ./results/${stack}-rate${rate}.json"
 }
 

@@ -1,0 +1,438 @@
+SHELL := /usr/bin/env bash
+
+include docker/common-versions
+
+# Defaults
+PROJECT_NAME ?= llm-d
+DOCKERFILE_DIR = docker
+XPU_BUILD_DIR ?= .cache/vllm-src
+XPU_VLLM_TAG ?= v0.17.0
+XPU_DOCKERFILE_URL ?= https://raw.githubusercontent.com/vllm-project/vllm/$(XPU_VLLM_TAG)/docker/Dockerfile.xpu
+
+ifeq ($(DEVICE), xpu)
+	DOCKERFILE_DIR = $(XPU_BUILD_DIR)
+	DOCKERFILE ?= Dockerfile.xpu
+else ifeq ($(DEVICE), cpu)
+	DOCKERFILE ?= Dockerfile.cpu
+else ifeq ($(DEVICE), hpu)
+	DOCKERFILE ?= Dockerfile.hpu
+else
+	DOCKERFILE ?= Dockerfile.cuda
+endif # Maybe we break out version per image because they share no common bits --> independent release cycles
+VERSION ?= v0.2.1
+
+# New tag to use if you would like to use `make image-retag`
+NEW_TAG ?= sha256...
+
+# DEVICE, options: ['cuda', 'xpu', 'cpu', 'hpu']
+DEVICE ?= cuda
+
+# ARCH, options: ['amd64', 'arm64']
+ARCH ?= amd64
+
+# OS, options: ['rhel', 'ubuntu']
+OS ?= rhel
+
+# CUDA version (e.g., 12.8, 13.0)
+CUDA_VERSION ?= 13.0
+CUDA_MAJOR := $(word 1,$(subst ., ,$(CUDA_VERSION)))
+CUDA_MINOR := $(word 2,$(subst ., ,$(CUDA_VERSION)))
+
+# USE_SCCACHE: set to true to enable sccache (requires AWS credentials)
+USE_SCCACHE ?= false
+
+# MAX_JOBS: parallel compilation jobs (reduce to avoid OOM, e.g., MAX_JOBS=1)
+MAX_JOBS ?= 3
+
+# TORCH_CUDA_ARCH_LIST: CUDA architectures to build for
+# TORCH_CUDA_ARCH_LIST ?= 7.0;7.5;8.0;8.6;8.9;9.0;9.0a;10.0;12.0+PTX
+TORCH_CUDA_ARCH_LIST ?= "10.0"
+
+# Map OS to base image suffix
+ifeq ($(OS), ubuntu)
+	BASE_IMAGE_SUFFIX := ubuntu24.04
+else
+	BASE_IMAGE_SUFFIX := ubi9
+endif
+BUILD_BASE_IMAGE_SUFFIX := $(BASE_IMAGE_SUFFIX)
+
+IMAGE_BASE ?= ghcr.io/llm-d/$(PROJECT_NAME)-$(DEVICE)
+
+BUILD_CONTEXT ?= .
+ifeq ($(DEVICE), xpu)
+	BUILD_CONTEXT = $(XPU_BUILD_DIR)
+endif
+DOCKERFILE_PATH = $(DOCKERFILE_DIR)/$(DOCKERFILE)
+
+# BUILD_TYPE, options ['dev', 'prod']
+BUILD_TYPE ?= dev
+ifeq ($(BUILD_TYPE), dev)
+	IMAGE_BASE := $(IMAGE_BASE)-dev
+endif
+
+# BUILD_DEBUG, options ['true', 'false']
+BUILD_DEBUG ?= false
+ifeq ($(BUILD_DEBUG), true)
+	IMAGE_BASE := $(IMAGE_BASE)-debug
+endif
+
+IMG := $(IMAGE_BASE):$(VERSION)
+
+CONTAINER_TOOL := $(shell (command -v docker >/dev/null 2>&1 && echo docker) || (command -v podman >/dev/null 2>&1 && echo podman) || echo "")
+BUILDER := $(shell command -v buildah >/dev/null 2>&1 && echo buildah || echo $(CONTAINER_TOOL))
+
+# SUPPRESS_PYTHON_OUTPUT: Set to "1" or "true" to suppress verbose pip output during build (default: verbose enabled)
+SUPPRESS_PYTHON_OUTPUT ?=
+
+# ENABLE_EFA: Set to "true" to enable AWS Elastic Fabric Adapter support in CUDA builds (default: false)
+# When enabled, EFA installer provides RDMA packages; otherwise use CUDA base image packages
+ENABLE_EFA ?= false
+
+# ENABLE_GB200: Set to "true" to build with GB200-specific NVSHMEM and DeepEP versions (default: false)
+ENABLE_GB200 ?= false
+
+# Override NVSHMEM version and DeepEP repo/version for GB200 builds
+# and install NVSHMEM via pypi rather than from source
+NVSHMEM_VERSION_OVERRIDE ?=
+DEEPEP_REPO_OVERRIDE ?=
+DEEPEP_VERSION_OVERRIDE ?=
+INSTALL_OFFLOADING_CONNECTOR_OVERRIDE ?=
+ifeq ($(ENABLE_GB200), true)
+	NVSHMEM_BUILD_FROM_SOURCE := "false"
+	NVSHMEM_VERSION_OVERRIDE := $(GB200_NVSHMEM_VERSION)
+	DEEPEP_REPO_OVERRIDE := $(GB200_DEEPEP_REPO)
+	DEEPEP_VERSION_OVERRIDE := $(GB200_DEEPEP_VERSION)
+	INSTALL_OFFLOADING_CONNECTOR_OVERRIDE := $(GB200_INSTALL_OFFLOADING_CONNECTOR)
+endif
+
+.PHONY: help
+help: ## Print help
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+	@printf "\n\033[1mArchitecture Examples:\033[0m\n"
+	@printf "  \033[36mmake image-build ARCH=amd64\033[0m                              # Build for x86_64 (default)\n"
+	@printf "  \033[36mmake image-build ARCH=arm64\033[0m                              # Build for ARM64\n"
+	@printf "  \033[36mmake image-build ARCH=arm64 OS=ubuntu\033[0m                    # ARM64 with Ubuntu base\n"
+	@printf "  \033[36mmake image-build ARCH=arm64 OS=ubuntu CUDA_VERSION=13.0\033[0m  # ARM64, Ubuntu, CUDA 13\n"
+	@printf "\n\033[1mXPU Build Examples:\033[0m\n"
+	@printf "  \033[36mmake image-build DEVICE=xpu\033[0m                    # Build Intel XPU Docker image\n"
+	@printf "  \033[36mmake image-build DEVICE=xpu VERSION=v0.2.0\033[0m     # Build with specific version\n"
+	@printf "  \033[36mmake image-push DEVICE=xpu\033[0m                     # Push Intel XPU Docker image\n"
+	@printf "  \033[36mmake image-retag DEVICE=xpu NEW_TAG=test\033[0m       # Re-Tag Intel XPU Docker image\n"
+	@printf "  \033[36mmake env DEVICE=xpu\033[0m                            # Show XPU environment variables\n"
+	@printf "\n\033[1mCUDA Build Examples:\033[0m\n"
+	@printf "  \033[36mmake image-build DEVICE=cuda\033[0m                            # Build CUDA Docker image (default, no EFA)\n"
+	@printf "  \033[36mmake image-build DEVICE=cuda BUILD_DEBUG=true\033[0m           # Build CUDA Docker image with debug symbols\n"
+	@printf "  \033[36mmake image-build DEVICE=cuda ENABLE_EFA=true\033[0m            # Build CUDA image with EFA support\n"
+	@printf "  \033[36mmake image-build DEVICE=cuda ENABLE_GB200=true\033[0m          # Build CUDA image for GB200\n"
+
+##@ Development
+
+.PHONY: test
+test: ## Run tests
+
+.PHONY: post-deploy-test
+post-deploy-test: ## Run post deployment tests
+	echo Success!
+	@echo "Post-deployment tests passed."
+
+.PHONY: lint
+lint: ## Run lint
+
+##@ Build
+
+.PHONY: build
+build: ##
+
+##@ Container Build/Push
+
+# The Dockerfile the build task should use.
+# Default is the canonical “Dockerfile” so local `make buildah-build`
+# still works without extra flags.
+
+.PHONY: buildah-build
+buildah-build: check-builder ## Build and push image (multi-arch if supported)
+	@echo "✅ Using builder: $(BUILDER)"
+	@if [ "$(DEVICE)" = "xpu" ]; then $(MAKE) xpu-prepare; fi
+	@if [ "$(BUILDER)" = "buildah" ]; then \
+	  echo "🔧 Buildah detected: Building for $(ARCH) with $(DOCKERFILE_PATH)…"; \
+	  buildah build --file $(DOCKERFILE_PATH) --arch=$(ARCH) --os=linux --layers \
+		$(if $(filter cuda,$(DEVICE)),--build-arg ENABLE_EFA=$(ENABLE_EFA)) \
+		$(if $(NVSHMEM_VERSION_OVERRIDE),--build-arg NVSHMEM_VERSION=$(NVSHMEM_VERSION_OVERRIDE)) \
+		$(if $(DEEPEP_REPO_OVERRIDE),--build-arg DEEPEP_REPO=$(DEEPEP_REPO_OVERRIDE)) \
+		$(if $(DEEPEP_VERSION_OVERRIDE),--build-arg DEEPEP_VERSION=$(DEEPEP_VERSION_OVERRIDE)) \
+		$(if $(INSTALL_OFFLOADING_CONNECTOR_OVERRIDE),--build-arg INSTALL_OFFLOADING_CONNECTOR=$(INSTALL_OFFLOADING_CONNECTOR_OVERRIDE)) \
+		-t $(IMG) $(BUILD_CONTEXT) || exit 1; \
+	  echo "🚀 Pushing image: $(IMG)"; \
+	  buildah push $(IMG) docker://$(IMG) || exit 1; \
+	elif [ "$(BUILDER)" = "docker" ]; then \
+	  echo "🐳 Docker detected: Building with buildx for linux/$(ARCH)..."; \
+	  sed -e '1 s/\(^FROM\)/FROM --platform=$${BUILDPLATFORM}/' $(DOCKERFILE_PATH) >$(DOCKERFILE_DIR)/Dockerfile.cross; \
+	  - docker buildx create --use --name image-builder || true; \
+	  docker buildx use image-builder; \
+	  docker buildx build --push --platform=linux/$(ARCH) --tag $(IMG) \
+		$(if $(filter cuda,$(DEVICE)),--build-arg ENABLE_EFA=$(ENABLE_EFA)) \
+		$(if $(NVSHMEM_VERSION_OVERRIDE),--build-arg NVSHMEM_VERSION=$(NVSHMEM_VERSION_OVERRIDE)) \
+		$(if $(DEEPEP_REPO_OVERRIDE),--build-arg DEEPEP_REPO=$(DEEPEP_REPO_OVERRIDE)) \
+		$(if $(DEEPEP_VERSION_OVERRIDE),--build-arg DEEPEP_VERSION=$(DEEPEP_VERSION_OVERRIDE)) \
+		$(if $(INSTALL_OFFLOADING_CONNECTOR_OVERRIDE),--build-arg INSTALL_OFFLOADING_CONNECTOR=$(INSTALL_OFFLOADING_CONNECTOR_OVERRIDE)) \
+		-f $(DOCKERFILE_DIR)/Dockerfile.cross $(BUILD_CONTEXT) || exit 1; \
+	  docker buildx rm image-builder || true; \
+	  rm $(DOCKERFILE_DIR)/Dockerfile.cross; \
+	elif [ "$(BUILDER)" = "podman" ]; then \
+	  echo "⚠️ Podman detected: Building for linux/$(ARCH)..."; \
+	  podman build --platform=linux/$(ARCH) --format=docker -f $(DOCKERFILE_PATH) -t $(IMG) $(BUILD_CONTEXT) || exit 1; \
+	  podman push $(IMG) || exit 1; \
+	else \
+	  echo "❌ No supported container tool available."; \
+	  exit 1; \
+	fi
+
+.PHONY:	image-build
+image-build: check-container-tool ## Build Docker image using $(CONTAINER_TOOL)
+	@printf "\033[33;1m==== Building Docker image $(IMG) for linux/$(ARCH) ====\033[0m\n"
+	@if [ "$(DEVICE)" = "xpu" ]; then $(MAKE) xpu-prepare; fi
+	$(CONTAINER_TOOL) build --progress=plain --platform linux/$(ARCH) \
+		--build-arg CUDA_MAJOR=$(CUDA_MAJOR) \
+		--build-arg CUDA_MINOR=$(CUDA_MINOR) \
+		--build-arg TARGETOS=$(OS) \
+		--build-arg BUILD_BASE_IMAGE_SUFFIX=$(BUILD_BASE_IMAGE_SUFFIX) \
+		--build-arg FINAL_BASE_IMAGE_SUFFIX=$(BASE_IMAGE_SUFFIX) \
+		--build-arg USE_SCCACHE=$(USE_SCCACHE) \
+		--build-arg MAX_JOBS=$(MAX_JOBS) \
+		--build-arg TORCH_CUDA_ARCH_LIST="$(TORCH_CUDA_ARCH_LIST)" \
+		$(if $(SUPPRESS_PYTHON_OUTPUT),--build-arg SUPPRESS_PYTHON_OUTPUT=$(SUPPRESS_PYTHON_OUTPUT)) \
+		--build-arg BUILD_DEBUG=$(BUILD_DEBUG) \
+		$(if $(filter cuda,$(DEVICE)),--build-arg ENABLE_EFA=$(ENABLE_EFA)) \
+		$(if $(NVSHMEM_VERSION_OVERRIDE),--build-arg NVSHMEM_VERSION=$(NVSHMEM_VERSION_OVERRIDE)) \
+		$(if $(DEEPEP_REPO_OVERRIDE),--build-arg DEEPEP_REPO=$(DEEPEP_REPO_OVERRIDE)) \
+		$(if $(DEEPEP_VERSION_OVERRIDE),--build-arg DEEPEP_VERSION=$(DEEPEP_VERSION_OVERRIDE)) \
+		$(if $(INSTALL_OFFLOADING_CONNECTOR_OVERRIDE),--build-arg INSTALL_OFFLOADING_CONNECTOR=$(INSTALL_OFFLOADING_CONNECTOR_OVERRIDE)) \
+		-t $(IMG) -f $(DOCKERFILE_PATH) $(BUILD_CONTEXT)
+
+.PHONY: xpu-prepare
+xpu-prepare: ## Prepare vLLM XPU build context and upstream Dockerfile
+	@rm -rf $(XPU_BUILD_DIR)
+	@mkdir -p $(dir $(XPU_BUILD_DIR))
+	@git clone $(VLLM_REPO) $(XPU_BUILD_DIR)
+	@git -C $(XPU_BUILD_DIR) checkout $(VLLM_COMMIT_SHA)
+	@curl -fsSL $(XPU_DOCKERFILE_URL) -o $(XPU_BUILD_DIR)/docker/Dockerfile.xpu
+
+.PHONY: image-push
+image-push: check-container-tool ## Push Docker image $(IMG) to registry
+	@printf "\033[33;1m==== Pushing Docker image $(IMG) ====\033[0m\n"
+	$(CONTAINER_TOOL) push $(IMG)
+
+.PHONY: image-retag
+image-retag: check-container-tool ## Push Docker image $(IMG) to registry
+	@printf "\033[33;1m==== Pushing Docker image $(IMG) to $(IMAGE_BASE):$(NEW_TAG) ====\033[0m\n"
+	$(CONTAINER_TOOL) tag $(IMG) $(IMAGE_BASE):$(NEW_TAG)
+
+##@ Install/Uninstall Targets
+
+# Default install/uninstall (Docker)
+install: install-docker ## Default install using Docker
+	@echo "Default Docker install complete."
+
+uninstall: uninstall-docker ## Default uninstall using Docker
+	@echo "Default Docker uninstall complete."
+
+### Docker Targets
+
+.PHONY: install-docker
+install-docker: check-container-tool ## Install app using $(CONTAINER_TOOL)
+	@echo "Starting container with $(CONTAINER_TOOL)..."
+	$(CONTAINER_TOOL) run -d --name $(PROJECT_NAME)-container $(IMG)
+	@echo "$(CONTAINER_TOOL) installation complete."
+	@echo "To use $(PROJECT_NAME), run:"
+	@echo "alias $(PROJECT_NAME)='$(CONTAINER_TOOL) exec -it $(PROJECT_NAME)-container /app/$(PROJECT_NAME)'"
+
+.PHONY: uninstall-docker
+uninstall-docker: check-container-tool ## Uninstall app from $(CONTAINER_TOOL)
+	@echo "Stopping and removing container in $(CONTAINER_TOOL)..."
+	-$(CONTAINER_TOOL) stop $(PROJECT_NAME)-container && $(CONTAINER_TOOL) rm $(PROJECT_NAME)-container
+@echo "$(CONTAINER_TOOL) uninstallation complete. Remove alias if set: unalias $(PROJECT_NAME)"
+
+### Kubernetes Targets (kubectl)
+
+.PHONY: install-k8s
+install-k8s: check-kubectl check-kustomize check-envsubst ## Install on Kubernetes
+	export PROJECT_NAME=${PROJECT_NAME}
+	export NAMESPACE=${NAMESPACE}
+	@echo "Creating namespace (if needed) and setting context to $(NAMESPACE)..."
+	kubectl create namespace $(NAMESPACE) 2>/dev/null || true
+	kubectl config set-context --current --namespace=$(NAMESPACE)
+	@echo "Deploying resources from deploy/ ..."
+	# Build the kustomization from deploy, substitute variables, and apply the YAML
+	kustomize build deploy | envsubst | kubectl apply -f -
+	@echo "Waiting for pod to become ready..."
+	sleep 5
+	@POD=$$(kubectl get pod -l app=$(PROJECT_NAME)-statefulset -o jsonpath='{.items[0].metadata.name}'); \
+	echo "Kubernetes installation complete."; \
+	echo "To use the app, run:"; \
+	echo "alias $(PROJECT_NAME)='kubectl exec -n $(NAMESPACE) -it $$POD -- /app/$(PROJECT_NAME)'"
+
+.PHONY: uninstall-k8s
+uninstall-k8s: check-kubectl check-kustomize check-envsubst ## Uninstall from Kubernetes
+	export PROJECT_NAME=${PROJECT_NAME}
+	export NAMESPACE=${NAMESPACE}
+	@echo "Removing resources from Kubernetes..."
+	kustomize build deploy | envsubst | kubectl delete --force -f - || true
+	POD=$$(kubectl get pod -l app=$(PROJECT_NAME)-statefulset -o jsonpath='{.items[0].metadata.name}'); \
+	echo "Deleting pod: $$POD"; \
+	kubectl delete pod "$$POD" --force --grace-period=0 || true; \
+	echo "Kubernetes uninstallation complete. Remove alias if set: unalias $(PROJECT_NAME)"
+
+### OpenShift Targets (oc)
+
+.PHONY: install-openshift
+install-openshift: check-kubectl check-kustomize check-envsubst ## Install on OpenShift
+	@echo $$PROJECT_NAME $$NAMESPACE $$IMAGE_BASE $$VERSION
+	@echo "Creating namespace $(NAMESPACE)..."
+	kubectl create namespace $(NAMESPACE) 2>/dev/null || true
+	@echo "Deploying common resources from deploy/ ..."
+	# Build and substitute the base manifests from deploy, then apply them
+	kustomize build deploy | envsubst '$$PROJECT_NAME $$NAMESPACE $$IMAGE_BASE $$VERSION' | kubectl apply -n $(NAMESPACE) -f -
+	@echo "Waiting for pod to become ready..."
+	sleep 5
+	@POD=$$(kubectl get pod -l app=$(PROJECT_NAME)-statefulset -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}'); \
+	echo "OpenShift installation complete."; \
+	echo "To use the app, run:"; \
+	echo "alias $(PROJECT_NAME)='kubectl exec -n $(NAMESPACE) -it $$POD -- /app/$(PROJECT_NAME)'"
+
+.PHONY: uninstall-openshift
+uninstall-openshift: check-kubectl check-kustomize check-envsubst ## Uninstall from OpenShift
+	@echo "Removing resources from OpenShift..."
+	kustomize build deploy | envsubst '$$PROJECT_NAME $$NAMESPACE $$IMAGE_BASE $$VERSION' | kubectl delete --force -f - || true
+	# @if kubectl api-resources --api-group=route.openshift.io | grep -q Route; then \
+	#   envsubst '$$PROJECT_NAME $$NAMESPACE $$IMAGE_BASE $$VERSION' < deploy/openshift/route.yaml | kubectl delete --force -f - || true; \
+	# fi
+	@POD=$$(kubectl get pod -l app=$(PROJECT_NAME)-statefulset -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}'); \
+	echo "Deleting pod: $$POD"; \
+	kubectl delete pod "$$POD" --force --grace-period=0 || true; \
+	echo "OpenShift uninstallation complete. Remove alias if set: unalias $(PROJECT_NAME)"
+
+### RBAC Targets (using kustomize and envsubst)
+
+.PHONY: install-rbac
+install-rbac: check-kubectl check-kustomize check-envsubst ## Install RBAC
+	@echo "Applying RBAC configuration from deploy/rbac..."
+	kustomize build deploy/rbac | envsubst '$$PROJECT_NAME $$NAMESPACE $$IMAGE_BASE $$VERSION' | kubectl apply -f -
+
+.PHONY: uninstall-rbac
+uninstall-rbac: check-kubectl check-kustomize check-envsubst ## Uninstall RBAC
+	@echo "Removing RBAC configuration from deploy/rbac..."
+	kustomize build deploy/rbac | envsubst '$$PROJECT_NAME $$NAMESPACE $$IMAGE_BASE $$VERSION' | kubectl delete -f - || true
+
+.PHONY: env
+env:
+	@echo "IMAGE_BASE=$(IMAGE_BASE)"
+	@echo "VERSION=$(VERSION)"
+	@echo "ARCH=$(ARCH)"
+	@echo "OS=$(OS)"
+	@echo "CUDA_VERSION=$(CUDA_VERSION) ($(CUDA_MAJOR).$(CUDA_MINOR))"
+	@echo "BASE_IMAGE_SUFFIX=$(BASE_IMAGE_SUFFIX)"
+	@echo "USE_SCCACHE=$(USE_SCCACHE)"
+	@echo "IMG=$(IMG)"
+	@echo "CONTAINER_TOOL=$(CONTAINER_TOOL)"
+
+##@ Tools
+
+.PHONY: check-tools
+check-tools: \
+  check-go \
+  check-ginkgo \
+  check-golangci-lint \
+  check-jq \
+  check-kustomize \
+  check-envsubst \
+  check-container-tool \
+  check-kubectl \
+  check-buildah \
+  check-podman
+	@echo "✅ All required tools are installed."
+
+.PHONY: check-go
+check-go:
+	@command -v go >/dev/null 2>&1 || { \
+	  echo "❌ Go is not installed. Install it from https://golang.org/dl/"; exit 1; }
+
+.PHONY: check-ginkgo
+check-ginkgo:
+	@command -v ginkgo >/dev/null 2>&1 || { \
+	  echo "❌ ginkgo is not installed. Install with: go install github.com/onsi/ginkgo/v2/ginkgo@latest"; exit 1; }
+
+.PHONY: check-golangci-lint
+check-golangci-lint:
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+	  echo "❌ golangci-lint is not installed. Install from https://golangci-lint.run/usage/install/"; exit 1; }
+
+.PHONY: check-jq
+check-jq:
+	@command -v jq >/dev/null 2>&1 || { \
+	  echo "❌ jq is not installed. Install it from https://stedolan.github.io/jq/download/"; exit 1; }
+
+.PHONY: check-kustomize
+check-kustomize:
+	@command -v kustomize >/dev/null 2>&1 || { \
+	  echo "❌ kustomize is not installed. Install it from https://kubectl.docs.kubernetes.io/installation/kustomize/"; exit 1; }
+
+.PHONY: check-envsubst
+check-envsubst:
+	@command -v envsubst >/dev/null 2>&1 || { \
+	  echo "❌ envsubst is not installed. It is part of gettext."; \
+	  echo "🔧 Try: sudo apt install gettext OR brew install gettext"; exit 1; }
+
+.PHONY: check-container-tool
+check-container-tool:
+	@command -v $(CONTAINER_TOOL) >/dev/null 2>&1 || { \
+	  echo "❌ $(CONTAINER_TOOL) is not installed."; \
+	  echo "🔧 Try: sudo apt install $(CONTAINER_TOOL) OR brew install $(CONTAINER_TOOL)"; exit 1; }
+
+.PHONY: check-kubectl
+check-kubectl:
+	@command -v kubectl >/dev/null 2>&1 || { \
+	  echo "❌ kubectl is not installed. Install it from https://kubernetes.io/docs/tasks/tools/"; exit 1; }
+
+.PHONY: check-builder
+check-builder:
+	@if [ -z "$(BUILDER)" ]; then \
+		echo "❌ No container builder tool (buildah, docker, or podman) found."; \
+		exit 1; \
+	else \
+		echo "✅ Using builder: $(BUILDER)"; \
+	fi
+
+.PHONY: check-buildah
+check-buildah:
+	@command -v buildah >/dev/null 2>&1 || { \
+	  echo "⚠️  buildah is not installed. You can install it with:"; \
+	  echo "🔧 sudo apt install buildah  OR  brew install buildah"; exit 1; }
+
+.PHONY: check-podman
+check-podman:
+	@command -v podman >/dev/null 2>&1 || { \
+	  echo "⚠️  Podman is not installed. You can install it with:"; \
+	  echo "🔧 sudo apt install podman  OR  brew install podman"; exit 1; }
+
+##@ Alias checking
+.PHONY: check-alias
+check-alias: check-container-tool
+	@echo "🔍 Checking alias functionality for container '$(PROJECT_NAME)-container'..."
+	@if ! $(CONTAINER_TOOL) exec $(PROJECT_NAME)-container /app/$(PROJECT_NAME) --help >/dev/null 2>&1; then \
+	  echo "⚠️  The container '$(PROJECT_NAME)-container' is running, but the alias might not work."; \
+	  echo "🔧 Try: $(CONTAINER_TOOL) exec -it $(PROJECT_NAME)-container /app/$(PROJECT_NAME)"; \
+	else \
+	  echo "✅ Alias is likely to work: alias $(PROJECT_NAME)='$(CONTAINER_TOOL) exec -it $(PROJECT_NAME)-container /app/$(PROJECT_NAME)'"; \
+	fi
+
+.PHONY: print-namespace
+print-namespace: ## Print the current namespace
+	@echo "$(NAMESPACE)"
+
+.PHONY: print-project-name
+print-project-name: ## Print the current project name
+	@echo "$(PROJECT_NAME)"
+
+.PHONY: install-hooks
+install-hooks: ## Install git hooks
+	git config core.hooksPath hooks

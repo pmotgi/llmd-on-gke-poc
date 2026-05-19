@@ -25,7 +25,7 @@ metadata:
   namespace: vllm-base
   labels: { app: vllm-gemma, stack: vllm-baseline }
 spec:
-  replicas: 1
+  replicas: 4
   selector:
     matchLabels: { app: vllm-gemma }
   template:
@@ -39,7 +39,7 @@ spec:
       nodeSelector:
         cloud.google.com/gke-accelerator: nvidia-rtx-pro-6000
         # If you set PROVISIONING_MODEL=FLEX_START, also uncomment:
-        # cloud.google.com/compute-class: g4-flex-start
+        #cloud.google.com/compute-class: g4-flex-start
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists
@@ -51,7 +51,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: vllm
-          image: vllm/vllm-openai:v0.11.0
+          image: vllm/vllm-openai:latest
           imagePullPolicy: IfNotPresent
           args:
             - "--model=$(MODEL_ID)"
@@ -61,14 +61,13 @@ spec:
             - "--tensor-parallel-size=1"
             - "--max-model-len=32768"
             - "--max-num-seqs=256"
-            - "--gpu-memory-utilization=0.92"
+            - "--gpu-memory-utilization=0.95"
             - "--enable-prefix-caching"
-            - "--kv-cache-dtype=fp8"
+            # - "--kv-cache-dtype=fp8"
             - "--dtype=bfloat16"
-            - "--trust-remote-code"
-            - "--disable-log-requests"
+            # - "--trust-remote-code"
           env:
-            - { name: MODEL_ID, value: "google/gemma-3n-E4B-it" }     # ← change here if needed
+            - { name: MODEL_ID, value: "google/gemma-4-E4B-it" }     # ← change here if needed
             - { name: HF_HOME, value: "/data/hf" }
             - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "1" }
             - name: HF_TOKEN

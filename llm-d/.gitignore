@@ -1,0 +1,15 @@
+*.swp
+*.history
+.DS_Store
+CLAUDE.md
+.release-team
+
+# editor and IDE paraphernalia
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# helm chart directories via kustomize
+**/charts/

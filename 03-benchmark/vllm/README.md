@@ -130,10 +130,13 @@ knee shifts way higher.
 The benchmark drives load but doesn't directly observe replica count. Watch
 during the sweep:
 
+> [!NOTE]
+> `${NAMESPACE}` refers to the namespace environment variable configured during the `llm-d` deployment in the previous step (e.g., `llm-d-optimized-baseline`). Ensure it is exported in your current terminal shell before running the watch command.
+
 ```bash
 watch -n2 'kubectl -n vllm-base get hpa,pods,nodes -l workload=inference'
 # in another terminal for Stack B:
-watch -n2 'kubectl -n llm-d get hpa,pods'
+watch -n2 'kubectl -n ${NAMESPACE} get hpa,pods'
 ```
 
 At the higher rates (40, 80 QPS) HPA should scale 1→2→3 replicas. If it stays

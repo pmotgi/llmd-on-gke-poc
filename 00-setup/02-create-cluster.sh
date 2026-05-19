@@ -28,6 +28,8 @@ else
     --enable-ip-alias \
     --enable-autoupgrade \
     --enable-autorepair \
+    --cluster-ipv4-cidr=10.100.0.0/16 \
+    --services-ipv4-cidr=10.101.0.0/20 \
     --addons=GcsFuseCsiDriver,HttpLoadBalancing
 fi
 

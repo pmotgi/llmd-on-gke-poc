@@ -70,7 +70,6 @@ gemma-gke-poc/
 │   ├── 02-create-cluster.sh
 │   ├── 03-create-gpu-nodepool.sh      ← supports ON_DEMAND | SPOT | FLEX_START
 │   ├── 04-hf-secret.sh
-│   ├── 05-install-gpu-driver.sh       ← only if not using GKE-managed drivers
 │   └── 06-install-prereqs.sh          ← Gateway API CRDs, InferencePool CRDs, etc.
 ├── 01-vllm-baseline/
 │   ├── 01-vllm-deployment.yaml
@@ -79,19 +78,20 @@ gemma-gke-poc/
 │   ├── 04-hpa.yaml                    ← scales on vllm:num_requests_waiting
 │   ├── 05-custom-metrics-adapter.yaml
 │   └── README.md
-├── 02-llm-d/
-│   ├── 01-install-llm-d.sh            ← installs CRDs + helmfile apply
-│   ├── 02-values.yaml                 ← Gemma + G4 overrides for ms-inference-scheduling
-│   ├── 03-hpa.yaml                    ← scales on llm-d inference-aware metrics
-│   └── README.md
+├── 02-igw-llmd/
+│   ├── README.md                      ← Step-by-step guide for Stack B deployment
+│   └── instros                        ← Detailed command transcript and output verified in the POC
 ├── 03-benchmark/
-│   ├── inference-perf-config.yaml     ← shared workload spec
-│   ├── run-benchmark-vllm.yaml        ← K8s Job pointing at Stack A
-│   ├── run-benchmark-llmd.yaml        ← K8s Job pointing at Stack B
-│   ├── collect-results.sh
-│   └── README.md
+│   └── vllm/
+│       ├── README.md                  ← details of the benchmark harness
+│       ├── collect-results.sh         ← aggregates results and generates final metrics tables
+│       ├── run-benchmark-llmd.yaml    ← K8s Job running benchmark against Stack B
+│       ├── run-benchmark-vllm.yaml    ← K8s Job running benchmark against Stack A
+│       ├── run-sweep.sh               ← automated sweep script through sequential rates
+│       ├── results/                   ← holds raw benchmark output files
+│       └── sn-result/                 
 ├── 04-cleanup/
-│   └── teardown.sh
+│   └── teardown.sh                    ← teardown script to clean up cluster and nodes
 └── docs/
     ├── PROVISIONING.md                ← deep dive on on-demand vs Spot vs Flex
     ├── AUTOSCALING.md                 ← HPA strategy details
@@ -136,12 +136,15 @@ bash 00-setup/06-install-prereqs.sh
 kubectl apply -f 01-vllm-baseline/
 
 # 3. Deploy Stack B (llm-d optimized baseline)
-bash 02-llm-d/01-install-llm-d.sh
+# Refer to 02-igw-llmd/README.md for manual setup steps (subnet provisioning,
+# GKE L7 RILB gateway, helm chart install, and modelserver deployment).
+# Note: These commands should be executed after switching context to the `llm-d` subdirectory.
 
 # 4. Wait for both endpoints to be Ready, then benchmark
-kubectl apply -f 03-benchmark/run-benchmark-vllm.yaml
-kubectl apply -f 03-benchmark/run-benchmark-llmd.yaml
-bash 03-benchmark/collect-results.sh
+# Switch to the 03-benchmark/vllm directory and execute the sweep
+cd 03-benchmark/vllm
+bash run-sweep.sh both
+bash collect-results.sh
 
 # 5. Teardown
 bash 04-cleanup/teardown.sh
@@ -174,7 +177,7 @@ The benchmark reports the standard metrics — but for **per-GPU max utilization
 3. **GPU SM utilization at the knee** — from `DCGM_FI_DEV_GR_ENGINE_ACTIVE` via NVIDIA DCGM exporter. Targeting 80%+ during decode.
 4. **Goodput** — requests/sec that meet your TTFT + TPOT SLOs.
 
-The benchmark harness sweeps QPS, measures all four, and prints a knee-point summary. See `03-benchmark/README.md`.
+The benchmark harness sweeps QPS, measures all four, and prints a knee-point summary. See `03-benchmark/vllm/README.md`.
 
 ---
 
