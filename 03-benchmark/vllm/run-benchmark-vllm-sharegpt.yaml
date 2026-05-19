@@ -1,0 +1,102 @@
+# run-benchmark-vllm-sharegpt.yaml — Run `vllm bench serve` against Stack A (vLLM baseline) with ShareGPT dataset.
+#
+# What it does:
+#   • Downloads the ShareGPT dataset JSON.
+#   • Pre-processes the dataset to select 20 prompts in the length range of 128-256 tokens
+#     (approx. 500-1000 characters) and replicates each prompt 5 times (100 prompts total).
+#   • Sends these 100 requests against the target endpoint at a constant --request-rate (req/sec).
+#   • Streams responses and measures TTFT, TPOT, ITL, e2e latency, and output throughput.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-vllm-sharegpt
+  namespace: bench
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: { app: bench, target: vllm-baseline-sharegpt }
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: download-dataset
+          image: vllm/vllm-openai:latest
+          command: ["python3", "-c"]
+          args:
+            - |
+              import json
+              import urllib.request
+              url = "https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json"
+              print("Downloading ShareGPT dataset...")
+              urllib.request.urlretrieve(url, "/tmp/hf/sharegpt_raw.json")
+              print("Download complete.")
+              
+              print("Preprocessing dataset (filtering and repeating prompts)...")
+              with open("/tmp/hf/sharegpt_raw.json", "r", encoding="utf-8") as f:
+                  data = json.load(f)
+              
+              # Filter for length roughly matching 1400-1750 tokens (~5500-7000 chars)
+              filtered_data = []
+              for entry in data:
+                  if "conversations" in entry and len(entry["conversations"]) >= 2:
+                      prompt = entry["conversations"][0]["value"]
+                      if 5500 <= len(prompt) <= 7000:
+                          filtered_data.append(entry)
+              
+              print(f"Found {len(filtered_data)} matching prompts.")
+              
+              # Take first 700 unique prompts
+              sampled_data = filtered_data[:700]
+              
+              # Replicate each 3 times (2100 prompts total)
+              replicated_data = []
+              for entry in sampled_data:
+                  for _ in range(3):
+                      replicated_data.append(entry)
+              
+              with open("/tmp/hf/sharegpt.json", "w", encoding="utf-8") as f:
+                  json.dump(replicated_data, f)
+              print(f"Successfully saved {len(replicated_data)} preprocessed prompts.")
+          volumeMounts:
+            - { name: hf-cache, mountPath: /tmp/hf }
+      containers:
+        - name: vllm-bench
+          image: vllm/vllm-openai:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+
+              vllm bench serve \
+                --backend=openai-chat \
+                --base-url=http://vllm-gemma.vllm-base.svc.cluster.local:8000 \
+                --endpoint=/v1/chat/completions \
+                --model=google/gemma-4-E4B-it \
+                --dataset-name=sharegpt \
+                --dataset-path=/tmp/hf/sharegpt.json \
+                --num-prompts=2100 \
+                --request-rate=240 \
+                --max-concurrency=1024 \
+                --save-result \
+                --result-dir=/results \
+                --result-filename=bench-vllm-sharegpt.json \
+                --metric-percentiles=50,90,95,99 \
+                --seed=42
+              echo "--- RESULT JSON START ---"
+              cat /results/bench-vllm-sharegpt.json
+              echo ""
+              echo "--- RESULT JSON END ---"
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: llm-d-hf-token, key: HF_TOKEN }
+            - { name: HF_HOME, value: "/tmp/hf" }
+          resources:
+            requests: { cpu: "1", memory: "2Gi" }
+            limits:   { cpu: "2", memory: "4Gi" }
+          volumeMounts:
+            - { name: results,  mountPath: /results }
+            - { name: hf-cache, mountPath: /tmp/hf }
+      volumes:
+        - { name: results,  emptyDir: {} }
+        - { name: hf-cache, emptyDir: {} }
