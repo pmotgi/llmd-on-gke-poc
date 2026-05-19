@@ -30,7 +30,7 @@ kubectl -n vllm-base port-forward svc/vllm-gemma 8000:8000 &
 curl -s http://localhost:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "google/gemma-3n-E4B-it",
+    "model": "google/gemma-4-E4B-it",
     "messages": [{"role":"user","content":"Say hi in 5 words."}],
     "max_tokens": 32
   }' | jq .

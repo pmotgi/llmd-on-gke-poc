@@ -1,19 +1,12 @@
 # Gemma on GKE — POC: vLLM Baseline vs. llm-d Optimized Baseline
 
-End-to-end POC comparing **plain vLLM on GKE** vs. **llm-d Optimized Baseline on GKE** for serving Gemma 3n / Gemma 4 E4B-it (a Small Language Model) on **G4 GPU nodes (NVIDIA RTX PRO 6000 Blackwell)** with **HPA-driven autoscaling**, parameterized for **on-demand, Spot, or Flex-start** provisioning. Includes a benchmarking harness (`inference-perf` / `vllm bench serve`) that measures max sustainable throughput per GPU.
+End-to-end POC comparing **plain vLLM on GKE** vs. **llm-d Optimized Baseline on GKE** for serving Gemma 4 E4B-it (a Small Language Model) on **G4 GPU nodes (NVIDIA RTX PRO 6000 Blackwell)** with **HPA-driven autoscaling**, parameterized for **on-demand, Spot, or Flex-start** provisioning. Includes a benchmarking harness (`inference-perf` / `vllm bench serve`) that measures max sustainable throughput per GPU.
 
 ---
 
-## 0. Model name — important clarification
+## 0. Model name
 
-The original request mentioned `google/gemma-4-E4B-it`. There are **two** real models that match this description:
-
-| Name | HF Repo | Notes |
-|---|---|---|
-| Gemma 3n E4B-it | `google/gemma-3n-E4B-it` | Released 2025. Effective 4B params (~8B real). Multimodal (text/vision/audio). MatFormer + PLE. |
-| Gemma 4 E4B-it | `google/gemma-4-E4B-it` | Newer (2026). Effective 4B params. 128K context, native system prompt, function calling. |
-
-**Both work identically** for this POC — they're the same size class and supported by vLLM. The single env var `MODEL_ID` controls which one is served. `gemma-3n-E4B-it` is the more validated default; switch to `gemma-4-E4B-it` once your customer has accepted its model license on HuggingFace.
+This POC uses `google/gemma-4-E4B-it` as the target model.
 
 > **Note on "SLM"**: At ~8B raw / 4B effective parameters, FP16 weights consume ~8 GB GPU memory. A single G4 RTX PRO 6000 (96 GB) is **massively overprovisioned** for a single replica — which is exactly why this POC is interesting: the headroom lets you crank `--gpu-memory-utilization` high, run large KV caches, and showcase peak per-GPU throughput.
 
@@ -183,7 +176,7 @@ The benchmark harness sweeps QPS, measures all four, and prints a knee-point sum
 
 ## 7. Expected ballpark numbers (single G4 / 1× RTX PRO 6000)
 
-Rough what-to-expect for Gemma 3n E4B-it, BF16, batch decode, output-heavy workload (sharegpt). Real numbers come from the benchmark run.
+Rough what-to-expect for Gemma 4 E4B-it, BF16, batch decode, output-heavy workload (sharegpt). Real numbers come from the benchmark run.
 
 | Metric | vLLM baseline | llm-d optimized baseline |
 |---|---|---|

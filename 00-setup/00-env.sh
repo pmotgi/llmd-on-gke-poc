@@ -29,9 +29,7 @@ export MAX_NODES="${MAX_NODES:-8}"
 export PROVISIONING_MODEL="${PROVISIONING_MODEL:-SPOT}"
 
 # ----- Model -----
-# Pick ONE. Both work; gemma-3n is more battle-tested in vLLM today.
 export MODEL_ID="${MODEL_ID:-google/gemma-4-E4B-it}"
-# export MODEL_ID="google/gemma-4-E4B-it"
 
 # HuggingFace token (read scope) — accept the model license first on hf.co
 export HF_TOKEN="${HF_TOKEN:-hf_your_token_here}"
