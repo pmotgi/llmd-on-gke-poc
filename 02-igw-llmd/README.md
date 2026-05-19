@@ -347,9 +347,5 @@ STACK B — llm-d optimized
      $$\text{Total cache per Pod} = 10 \times 16,384 = 163,840 \text{ tokens}$$
      This footprint fits entirely within the local KV cache memory of each individual pod! Therefore, the prefixes stay permanently cached. The cache hit rate reaches **$\sim 100\%$**, dramatically reducing the p99 TTFT down to **144.8ms** at rate 10 (a **$5.2\times$ latency reduction** over vLLM baseline) and meeting the strict 500ms SLO where the baseline fails.
 
-2. **Throughput Comparison & Latency Trade-Offs:**
-   * **Throughput Gains:** Under peak stress load (80 QPS), LLM-D delivers a **+3.04% increase** in total token throughput (`tot_tok/s`) and a **+3.52% increase** in output token throughput (`out_tok/s`).
-   * **Modest Throughput Limits:** Because the benchmarking client (`vllm bench serve`) acts as a closed rate-limiting generator, the throughput volume for both stacks remains tied to the targeted rate tier (rates 5 through 40 QPS) rather than raw GPU maximum output.
-   * **The Definitive Latency Victory:** The true measure of victory here is **TTFT latency reduction**. At 10 QPS, LLM-D achieves an **$80.8\%$ reduction (a $5.2\times$ speedup)** in p99 TTFT ($144.8\text{ ms}$ vs $753.1\text{ ms}$), comfortably satisfying the $500\text{ ms}$ TTFT SLO while the vLLM baseline fails completely due to continuous cold-prefill cache thrashing.
 
 
