@@ -5,3 +5,4 @@ Thumds.db
 # Local/temp files
 *.log
 *.tmp
+**/results/

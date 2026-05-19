@@ -75,14 +75,22 @@ gemma-gke-poc/
 │   ├── README.md                      ← Step-by-step guide for Stack B deployment
 │   └── instros                        ← Detailed command transcript and output verified in the POC
 ├── 03-benchmark/
-│   └── vllm/
-│       ├── README.md                  ← details of the benchmark harness
-│       ├── collect-results.sh         ← aggregates results and generates final metrics tables
-│       ├── run-benchmark-llmd.yaml    ← K8s Job running benchmark against Stack B
-│       ├── run-benchmark-vllm.yaml    ← K8s Job running benchmark against Stack A
-│       ├── run-sweep.sh               ← automated sweep script through sequential rates
-│       ├── results/                   ← holds raw benchmark output files
-│       └── sn-result/                 
+│   ├── vllm/
+│   │   ├── README.md                  ← details of the baseline sweep harness
+│   │   ├── collect-results.sh         
+│   │   ├── run-benchmark-llmd.yaml    
+│   │   ├── run-benchmark-vllm.yaml    
+│   │   ├── run-sweep.sh               
+│   │   └── results/                   
+│   └── inference-perf/
+│       ├── README.md                  ← details of the production-scale inference-perf harness
+│       ├── config-plain.yml           ← Plain shared prefix config
+│       ├── config-distributions.yml   ← Skewed distribution prefix config
+│       ├── config-multi-turn.yml      ← Chatbot multi-turn config
+│       ├── run-benchmark-llmd.yaml    
+│       ├── run-benchmark-vllm.yaml    
+│       ├── run-benchmark.sh           ← automated sequential sweep wrapper script
+│       └── results/                   ← holds raw logs and lifecycle json metrics outputs
 ├── 04-cleanup/
 │   └── teardown.sh                    ← teardown script to clean up cluster and nodes
 └── docs/
@@ -134,10 +142,14 @@ kubectl apply -f 01-vllm-baseline/
 # Note: These commands should be executed after switching context to the `llm-d` subdirectory.
 
 # 4. Wait for both endpoints to be Ready, then benchmark
-# Switch to the 03-benchmark/vllm directory and execute the sweep
+# Option A: Run the custom vLLM benchmark sweep
 cd 03-benchmark/vllm
 bash run-sweep.sh both
 bash collect-results.sh
+
+# Option B: Run the official production-scale inference-perf standard suite
+cd ../inference-perf
+bash run-benchmark.sh both
 
 # 5. Teardown
 bash 04-cleanup/teardown.sh

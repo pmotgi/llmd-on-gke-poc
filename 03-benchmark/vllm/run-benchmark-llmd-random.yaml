@@ -1,0 +1,72 @@
+# run-benchmark-llmd.yaml — Run `vllm bench serve` against Stack B (llm-d).
+# Identical to the vLLM-baseline Job except for --base-url, which points at
+# the llm-d Inference Gateway service instead of the bare vLLM service so
+# requests get inference-aware routing through the EPP.
+#
+# If you customized the gateway name in 02-llm-d/02-values.yaml, update
+# --base-url accordingly. Find it with:
+#   kubectl -n llm-d get svc | grep gateway
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-llmd
+  namespace: bench
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: { app: bench, target: llm-d }
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: download-dataset
+          image: vllm/vllm-openai:latest
+          command: ["python3", "-c"]
+          args:
+            - |
+              import urllib.request
+              url = "https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json"
+              print("Downloading ShareGPT dataset...")
+              urllib.request.urlretrieve(url, "/tmp/hf/sharegpt.json")
+              print("Download complete.")
+          volumeMounts:
+            - { name: hf-cache, mountPath: /tmp/hf }
+      containers:
+        - name: vllm-bench
+          image: vllm/vllm-openai:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+
+              vllm bench serve \
+                --backend=openai-chat \
+                --base-url=http://10.202.0.177:80 \
+                --endpoint=/v1/chat/completions \
+                --model=google/gemma-4-E4B-it \
+                --dataset-name=random \
+                --num-prompts=1200 \
+                --random-output-len=128 \
+                --save-result \
+                --result-dir=/results \
+                --result-filename=bench-llmd.json \
+                --metric-percentiles=50,90,95,99 \
+                --seed=42
+              echo "--- RESULT JSON START ---"
+              cat /results/bench-llmd.json
+              echo ""
+              echo "--- RESULT JSON END ---"
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: llm-d-hf-token, key: HF_TOKEN }
+            - { name: HF_HOME, value: "/tmp/hf" }
+          resources:
+            requests: { cpu: "1", memory: "2Gi" }
+            limits:   { cpu: "2", memory: "4Gi" }
+          volumeMounts:
+            - { name: results,  mountPath: /results }
+            - { name: hf-cache, mountPath: /tmp/hf }
+      volumes:
+        - { name: results,  emptyDir: {} }
+        - { name: hf-cache, emptyDir: {} }

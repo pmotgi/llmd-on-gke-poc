@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-inference-perf-llmd
+  namespace: bench
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: bench-inference-perf
+        target: llm-d
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: inference-perf
+          image: quay.io/inference-perf/inference-perf:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Starting inference-perf benchmark against llm-d..."
+              inference-perf \
+                --config_file /config/config.yml \
+                --server.base_url http://10.202.0.177 \
+                --tokenizer.pretrained_model_name_or_path Qwen/Qwen2.5-0.5B \
+                --tokenizer.token "$HF_TOKEN" \
+                --storage.local_storage.path /results \
+                --storage.local_storage.report_file_prefix llmd
+              echo "--- BENCHMARK COMPLETED ---"
+              echo "Listing output files:"
+              ls -l /results
+              echo "--- REPORT CONTENTS ---"
+              for f in /results/llmd*; do
+                echo "=== File: $f ==="
+                cat "$f"
+                echo ""
+              done
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: llm-d-hf-token, key: HF_TOKEN }
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+            - name: results-volume
+              mountPath: /results
+      volumes:
+        - name: config-volume
+          configMap:
+            name: inference-perf-config
+        - name: results-volume
+          emptyDir: {}
