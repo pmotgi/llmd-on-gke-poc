@@ -53,17 +53,17 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              # Set to "--prefix-len=2048" to test prefix caching with a shared system prompt/context.
-              PREFIX_LEN="--prefix-len=2048"
 
               vllm bench serve \
                 --backend=openai-chat \
                 --base-url=http://vllm-gemma.vllm-base.svc.cluster.local:8000 \
                 --endpoint=/v1/chat/completions \
                 --model=google/gemma-4-E4B-it \
-                --dataset-name=sharegpt \
-                --dataset-path=/tmp/hf/sharegpt.json \
-                $PREFIX_LEN \
+                --dataset-name prefix_repetition \
+                --prefix-repetition-prefix-len 16384 \
+                --prefix-repetition-suffix-len 128 \
+                --prefix-repetition-num-prefixes 40 \
+                --prefix-repetition-output-len 128 \
                 --num-prompts=1200 \
                 --request-rate=10 \
                 --max-concurrency=256 \

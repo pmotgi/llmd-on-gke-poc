@@ -3,14 +3,14 @@
 # Edit values below, then `source 00-env.sh`.
 
 # ----- GCP project / region -----
-export PROJECT_ID="${PROJECT_ID:-northam-ce-mlai-tpu}"
+export PROJECT_ID="${PROJECT_ID:-your-gcp-project-id}"
 export REGION="${REGION:-us-east5}"
 export ZONE="${ZONE:-us-east5-a}"  # G4 fractional GPU types only in us-central1-b;
                                       # full g4-standard-48 is in more zones — see
                                       # https://docs.cloud.google.com/compute/docs/regions-zones/gpu-regions-zones
 
 # ----- Cluster -----
-export CLUSTER_NAME="${CLUSTER_NAME:-pmotgi-tr-llmd-poc}"
+export CLUSTER_NAME="${CLUSTER_NAME:-your-gke-cluster-name}"
 export CLUSTER_VERSION="${CLUSTER_VERSION:-1.34}"   # rapid channel
 export RELEASE_CHANNEL="${RELEASE_CHANNEL:-rapid}"
 

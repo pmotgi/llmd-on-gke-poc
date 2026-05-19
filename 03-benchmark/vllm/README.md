@@ -60,6 +60,15 @@ P99 TPOT (ms):                           38.9
 ==================================================
 ```
 
+## Dataset Selection: Why `prefix_repetition`?
+
+This benchmark is configured to use the **`prefix_repetition`** dataset. Instead of a static dataset like ShareGPT, `prefix_repetition` dynamically generates traffic where multiple requests share a set of identical, large prefix sequences (simulating system prompts, RAG context, or multi-turn chat histories) followed by varying queries.
+
+This dataset is an excellent choice for this POC because:
+1. **Stress-tests Automatic Prefix Caching (APC):** It directly measures how effectively the serving engines cache and reuse prefill computations for common contexts.
+2. **Showcases llm-d's KV-Cache-Aware Routing:** In standard Kubernetes configurations (Stack A), a plain Service routes requests using round-robin/random load balancing. This disperses identical-prefix requests across different pods, leading to cache thrashing and redundant prefills on each replica. Stack B uses `llm-d`'s Endpoint Picker, which is *prefix-cache-aware*. It routes requests sharing the same prefix to the same backend replica, maximizing prefix cache hits and avoiding redundant prefill computation.
+3. **Simulates Realistic Production Workloads:** Production patterns like Retrieval-Augmented Generation (RAG), agentic loops, and multi-turn chat heavily rely on prefix sharing. Benchmarking with `prefix_repetition` provides realistic performance metrics for these high-value use cases.
+
 ## Full QPS sweep (the real comparison)
 
 ```bash
